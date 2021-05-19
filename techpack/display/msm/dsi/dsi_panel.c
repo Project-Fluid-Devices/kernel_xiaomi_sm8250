@@ -828,7 +828,6 @@ uint32_t dsi_panel_get_fod_dim_alpha(struct dsi_panel *panel)
 	return alpha;
 }
 
-extern bool is_dimlayer_hbm_enabled;
 int dsi_panel_update_doze(struct dsi_panel *panel) {
 	int rc = 0;
 
@@ -844,7 +843,6 @@ int dsi_panel_update_doze(struct dsi_panel *panel) {
 					panel->name, rc);
 	} else if (!panel->doze_enabled) {
 		rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_NOLP);
-		dsi_panel_set_fod_hbm(panel, is_dimlayer_hbm_enabled);
 		if (rc)
 			pr_err("[%s] failed to send DSI_CMD_SET_NOLP cmd, rc=%d\n",
 					panel->name, rc);
@@ -878,14 +876,18 @@ int dsi_panel_set_fod_hbm(struct dsi_panel *panel, bool status)
 {
         int rc = 0;
 
-	if (panel->doze_enabled)
-		rc = dsi_panel_update_doze(panel);
+        if (status) {
+                rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_DISP_HBM_FOD_ON);
+                if (rc)
+                        pr_err("[%s] failed to send DSI_CMD_SET_DISP_HBM_FOD_ON cmd, rc=%d\n",
+                                        panel->name, rc);
+        } else {
+                rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_DISP_HBM_FOD_OFF);
+                if (rc)
+                        pr_err("[%s] failed to send DSI_CMD_SET_DISP_HBM_FOD_OFF cmd, rc=%d\n",
+                                        panel->name, rc);
+        }
 
-	rc = dsi_panel_tx_cmd_set(panel, status ? DSI_CMD_SET_DISP_HBM_FOD_ON : DSI_CMD_SET_DISP_HBM_FOD_OFF);
-
-	if (rc)
-		pr_err("[%s] failed to send FOD HBM cmd, rc=%d\n",
-				panel->name, rc);
         return rc;
 }
 
