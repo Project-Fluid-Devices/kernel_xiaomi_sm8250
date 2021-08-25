@@ -51,6 +51,8 @@ static unsigned int num_devices = 1;
  */
 static size_t huge_class_size;
 
+static struct zram *zram0;
+
 static void zram_free_page(struct zram *zram, size_t index);
 static int zram_bvec_read(struct zram *zram, struct bio_vec *bvec,
 				u32 index, int offset, struct bio *bio);
@@ -1059,20 +1061,25 @@ static ssize_t use_dedup_store(struct device *dev,
 }
 #endif
 
+void zram_compact(void)
+{
+	if (!zram0)
+		return;
+
+	down_read(&zram0->init_lock);
+	if (!init_done(zram0)) {
+		up_read(&zram0->init_lock);
+		return;
+	}
+
+	zs_compact(zram0->mem_pool);
+	up_read(&zram0->init_lock);
+}
+
 static ssize_t compact_store(struct device *dev,
 		struct device_attribute *attr, const char *buf, size_t len)
 {
-	struct zram *zram = dev_to_zram(dev);
-
-	down_read(&zram->init_lock);
-	if (!init_done(zram)) {
-		up_read(&zram->init_lock);
-		return -EINVAL;
-	}
-
-	zs_compact(zram->mem_pool);
-	up_read(&zram->init_lock);
-
+	zram_compact();
 	return len;
 }
 
@@ -1122,7 +1129,7 @@ static ssize_t mm_stat_show(struct device *dev,
 			zram->limit_pages << PAGE_SHIFT,
 			max_used << PAGE_SHIFT,
 			(u64)atomic64_read(&zram->stats.same_pages),
-			pool_stats.pages_compacted,
+			atomic_long_read(&pool_stats.pages_compacted),
 			(u64)atomic64_read(&zram->stats.huge_pages),
 			zram_dedup_dup_size(zram),
 			zram_dedup_meta_size(zram));
@@ -2020,6 +2027,11 @@ static int zram_add(void)
 		goto out_free_dev;
 	device_id = ret;
 
+	if (device_id >= 1) {
+		ret = -ENOMEM;
+		goto out_free_idr;
+	}
+
 	init_rwsem(&zram->init_lock);
 #ifdef CONFIG_ZRAM_WRITEBACK
 	spin_lock_init(&zram->wb_limit_lock);
@@ -2083,12 +2095,12 @@ static int zram_add(void)
 
 	zram->disk->queue->backing_dev_info->capabilities |=
 			(BDI_CAP_STABLE_WRITES | BDI_CAP_SYNCHRONOUS_IO);
-	disk_to_dev(zram->disk)->groups = zram_disk_attr_groups;
-	add_disk(zram->disk);
+	device_add_disk(NULL, zram->disk, zram_disk_attr_groups);
 
 	strlcpy(zram->compressor, default_compressor, sizeof(zram->compressor));
 
 	zram_debugfs_register(zram);
+	zram0 = zram;
 	pr_info("Added device: %s\n", zram->disk->disk_name);
 	return device_id;
 
@@ -2120,6 +2132,7 @@ static int zram_remove(struct zram *zram)
 	mutex_unlock(&bdev->bd_mutex);
 
 	zram_debugfs_unregister(zram);
+
 	/* Make sure all the pending I/O are finished */
 	fsync_bdev(bdev);
 	zram_reset_device(zram);
@@ -2130,6 +2143,7 @@ static int zram_remove(struct zram *zram)
 	del_gendisk(zram->disk);
 	blk_cleanup_queue(zram->disk->queue);
 	put_disk(zram->disk);
+	zram0 = NULL;
 	kfree(zram);
 	return 0;
 }
